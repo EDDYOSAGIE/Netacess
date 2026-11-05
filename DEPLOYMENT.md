@@ -45,6 +45,41 @@ The Blueprint sets the non-secret defaults and generates `DJANGO_SECRET_KEY`. Co
 
 Generate the Fernet value locally with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Enter the result directly into Render; do not commit it. The API returns OTP codes only for numbers in `DEMO_PHONE_ALLOWLIST`. Keep this limited to demo participants. Configure the Flutterwave test webhook URL as `https://<render-service>.onrender.com/api/webhooks/flutterwave`.
 
+### Create a Demo Staff Account
+
+Staff use the same phone OTP login as customers; there is no separate admin OTP. Use a dedicated demo phone you control, add it to `DEMO_PHONE_ALLOWLIST` in the Render API environment, and save/redeploy so the demo OTP endpoint accepts it. The phone must use Nigerian international format such as `+2348012345678`.
+
+In the Render API service's **Shell** (working directory `backend`), create a staff account:
+
+```sh
+python manage.py createsuperuser
+```
+
+Enter the same allowlisted phone number when prompted, then set a strong password when asked. Website staff sign-in uses the phone OTP; the password is required for the Django superuser account but is not entered in the website OTP flow.
+
+If that phone already has a normal user account, do not create a duplicate. Promote the existing account in Render Shell instead, replacing the example phone with the exact account phone:
+
+```sh
+python manage.py shell -c "from apps.accounts.models import User; u = User.objects.get(phone='+2348012345678'); u.is_staff = True; u.is_superuser = True; u.is_active = True; u.save(update_fields=['is_staff', 'is_superuser', 'is_active'])"
+```
+
+Then open `https://<your-vercel-domain>/admin`. It redirects you to `/login`; enter the allowlisted phone and use the demo OTP returned by the API. After login, the app returns staff accounts to `/admin`. A regular customer account is redirected to `/profile`, so verify `is_staff` is enabled if you cannot enter the staff page. Keep the demo phone allowlist restricted to the people conducting the demo and remove numbers that are no longer needed.
+
+### Signup OTP Returns 500
+
+The OTP rate limiter uses Django's configured cache before it generates a code. With `USE_REDIS=false`, that cache is the `django_cache` database table. If Render's pre-deploy migration/cache-table step did not run successfully, OTP send requests can fail before reaching the SMS/demo code. The Blueprint already runs `python manage.py migrate && python manage.py createcachetable`; confirm both commands succeeded in the latest deploy logs.
+
+To repair a missing table, open the Render API service's **Shell** (working directory should be `backend`) and run:
+
+```sh
+python manage.py migrate
+python manage.py createcachetable
+```
+
+Then retry `https://<render-service>.onrender.com/health/`; it should return `{"status":"ok","database":"ok","cache":"ok"}`. If it still returns 503, check the API service's runtime logs. When `USE_REDIS=true`, do not create the database cache table to fix this; verify `REDIS_URL` is correct and reachable and is set on the API. Cache or task-broker infrastructure failures are logged with a safe error class and the OTP API returns 503 rather than an opaque 500 after this update.
+
+In the browser Network panel, inspect the failed `/api/auth/otp/send` response. A 403 `demo_number_not_allowed` means the phone needs to be added to `DEMO_PHONE_ALLOWLIST`; a 429 means a rate limit/cooldown; a 503 points to cache, Redis, database, or task-broker availability. Do not paste API keys or full secret-bearing environment values into support messages.
+
 ### Redis and Celery
 
 Yes, Render can run Redis-compatible Key Value storage and Celery. Vercel is only hosting the Next.js frontend here; do not run the persistent Celery worker or Beat scheduler on Vercel. Redis can be a Render Key Value service or an external Redis provider. Use the private/internal connection URL when available and keep it in Render secrets.
@@ -87,7 +122,7 @@ With Redis enabled, OTP throttles and OTP state are shared across API instances,
 
 After both services are deployed:
 
-1. Open `https://<render-service>.onrender.com/health/`; expect `{"status":"ok"}`.
+1. Open `https://<render-service>.onrender.com/health/`; expect `{"status":"ok","database":"ok","cache":"ok"}`.
 2. Open the Vercel site, load plans, and verify signup requests an OTP for a number in `DEMO_PHONE_ALLOWLIST`.
 3. Confirm the OTP appears only for an allowlisted demo phone; a different phone must receive an error and no code.
 4. Finish signup, confirm the terms/privacy acceptance is stored, then test login and profile access.

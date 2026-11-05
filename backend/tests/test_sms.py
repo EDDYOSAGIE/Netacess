@@ -239,6 +239,15 @@ class SMSOTPTests(TestCase):
             }, format="json")
         self.assertEqual(response.status_code, 429)
 
+    @patch("apps.sms.throttles.cache.get", side_effect=RuntimeError("cache unavailable"))
+    def test_otp_send_returns_503_when_throttle_cache_is_unavailable(self, cache_get):
+        response = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345678", "purpose": "signup",
+        }, format="json")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["detail"].code, "cache_unavailable")
+        cache_get.assert_called_once()
+
     def test_send_throttled_by_phone(self):
         with patch("apps.sms.otp.send_sms_task.delay"):
             for _ in range(3):

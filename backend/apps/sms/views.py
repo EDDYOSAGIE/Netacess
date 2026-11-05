@@ -12,7 +12,7 @@ from apps.accounts.policies import PRIVACY_VERSION, TERMS_VERSION
 
 from .otp import OTPError, PURPOSES, send_otp, verify_otp
 from .providers import SMSError, normalize_ng
-from .throttles import OTPPhoneIPThrottle
+from .throttles import CacheUnavailable, OTPPhoneIPThrottle
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,9 @@ class OTPSendView(APIView):
             throttled = "wait" in message.lower()
             return Response({"error": "sms_unavailable", "message": message},
                             status=status.HTTP_429_TOO_MANY_REQUESTS if throttled else status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            log.error("OTP request infrastructure unavailable (%s)", type(exc).__name__)
+            raise CacheUnavailable() from None
         result = {
             "sent": True,
             "sms_sent": sms_sent,
