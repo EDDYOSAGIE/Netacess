@@ -13,6 +13,7 @@ h1,h2,h3{font-family:'Barlow Semi Condensed','DM Sans',sans-serif}
 .brand{display:flex;align-items:center;flex:none}
 .brand img{display:block;width:94px;height:86px;object-fit:contain}
 .nav{display:flex;align-items:center;gap:22px;font-size:15px;font-weight:600;color:var(--muted)}
+.staff-compact{display:none}
 .btn{display:inline-block;text-align:center;padding:14px 22px;border-radius:8px;border:0;background:var(--blue);color:#fff;font-size:16px;font-weight:700;transition:background .18s,transform .18s}
 .btn:hover{background:var(--blue-dark)}
 .btn:hover{transform:translateY(-1px)}
@@ -215,4 +216,28 @@ textarea{font-family:inherit;font-size:15px;padding:12px 14px;border-radius:12px
 	.row{align-items:flex-start}
 	.row>.btn{width:100%}
 	.phone-entry{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr)}
+}
+
+@media(max-width:480px){
+	.header{gap:8px;padding:8px 12px}
+	.brand img{width:62px;height:56px}
+	.nav{gap:10px;font-size:13px;white-space:nowrap}
+	.nav .btn.sm{padding:9px 11px;font-size:13px}
+	.staff-full{display:none}
+	.staff-compact{display:inline}
+	.hero{gap:20px;padding:34px 0 28px}
+	.hero:before{inset:8px -12px 4px}
+	.hero>div:first-child{gap:16px!important}
+	.hero h1{font-size:38px;line-height:1.02}
+	.hero .lead{font-size:16px;line-height:1.5}
+	.hero>div:first-child>div{display:grid!important;grid-template-columns:minmax(0,1fr);gap:10px!important}
+	.hero>div:first-child>div .btn{width:100%}
+	.hero>.card{flex-basis:100%;padding:18px}
+}
+@media(max-width:360px){
+	.header{padding-inline:9px}
+	.brand img{width:54px;height:50px}
+	.nav{gap:7px;font-size:12px}
+	.nav .btn.sm{padding:8px 9px;font-size:12px}
+	.hero h1{font-size:35px}
 }

@@ -22,7 +22,7 @@ export function Header({ landing = false }: { landing?: boolean }) {
       <nav className="nav">
         {landing && <a href="#plans" className="hide">Plans</a>}
         {landing && <Link href="/how-it-works" className="hide">How it works</Link>}
-        {(!signedIn || isStaff) && <Link href="/admin" className="btn ghost sm">{isStaff ? "Admin" : "Staff sign in"}</Link>}
+        {(!signedIn || isStaff) && <Link href="/admin" className="btn ghost sm staff-link">{isStaff ? "Admin" : <><span className="staff-full">Staff sign in</span><span className="staff-compact">Staff</span></>}</Link>}
         {signedIn ? (
           <Link href="/profile" className="btn sm">My profile</Link>
         ) : (
