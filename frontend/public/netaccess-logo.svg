@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 146 132" role="img" aria-labelledby="title">
+  <title id="title">NetAccess Systems Nigeria</title>
+  <path fill="#0782aa" d="M77 9 89 22c11 18 13 39 5 59l-14 16-9-10c14-18 17-39 6-60l-9-10z"/>
+  <path fill="#1483ad" d="m63 22 10 10c8 17 9 32 1 49L64 94l-9-9c11-15 13-31 6-47l-7-8z"/>
+  <circle cx="48" cy="55" r="3" fill="#ef8321"/>
+  <circle cx="55" cy="55" r="3" fill="#ef8321"/>
+  <circle cx="62" cy="55" r="3" fill="#ef8321"/>
+  <text x="73" y="111" fill="#111" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700" text-anchor="middle">NetAccess</text>
+  <text x="73" y="126" fill="#111" font-family="Arial, Helvetica, sans-serif" font-size="10" font-weight="700" letter-spacing="3" text-anchor="middle">SYSTEMS</text>
+</svg>
