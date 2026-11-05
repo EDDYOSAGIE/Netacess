@@ -226,6 +226,39 @@ class SMSOTPTests(TestCase):
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(PolicyAcceptance.objects.count(), 1)
 
+    @patch("apps.sms.otp.send_sms_task.delay")
+    def test_login_sends_and_verifies_otp_for_existing_staff_user(self, send_task):
+        staff_user = User.objects.create_user(
+            "+2348012345678", "staff-password-123", is_staff=True, is_phone_verified=True,
+        )
+        sent = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345678", "purpose": "login",
+        }, format="json")
+        self.assertEqual(sent.status_code, 200)
+        code = send_task.call_args.args[1].split(" is ")[1].split(".")[0]
+
+        verified = self.client.post("/api/auth/otp/verify", {
+            "phone": "+2348012345678", "purpose": "login", "code": code,
+        }, format="json")
+        self.assertEqual(verified.status_code, 200)
+        self.assertEqual(verified.data["user"]["id"], str(staff_user.id))
+        self.assertIn("token", verified.data)
+
+    @patch("apps.sms.otp.send_sms_task.delay")
+    def test_login_unknown_phone_reports_missing_account_before_sending_otp(self, send_task):
+        sent = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345678", "purpose": "login",
+        }, format="json")
+        self.assertEqual(sent.status_code, 404)
+        self.assertEqual(sent.data["error"], "account_not_found")
+        send_task.assert_not_called()
+
+        verified = self.client.post("/api/auth/otp/verify", {
+            "phone": "08012345678", "purpose": "login", "code": "123456",
+        }, format="json")
+        self.assertEqual(verified.status_code, 404)
+        self.assertEqual(verified.data["error"], "account_not_found")
+
     def test_send_throttled_by_ip(self):
         with patch("apps.sms.otp.send_sms_task.delay"):
             cache.clear()

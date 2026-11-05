@@ -23,9 +23,12 @@ export default function Login() {
     try {
       const result = await api<{ code?: string }>("/api/auth/otp/send", { body: { phone: normalizedPhone, purpose: "login" } });
       sessionStorage.setItem("netacess_signup", JSON.stringify({ phone: normalizedPhone, full_name: "", email: "", mode: "login", demoCode: result.code }));
-      r.push("/signup/verify");
+      r.push("/login/verify");
     } catch (x) {
-      setErr(x instanceof ApiError ? x.message : "Something went wrong");
+      const error = x as ApiError;
+      setErr(error.code === "account_not_found"
+        ? "No account was found for this phone number. Ask the demo administrator to create or enable your staff account."
+        : error.message || "Something went wrong");
     } finally { setBusy(false); }
   }
 

@@ -50,6 +50,16 @@ class OTPSendView(APIView):
         serializer = OTPDataSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        if data["purpose"] == "login":
+            try:
+                normalized_phone = normalize_ng(data["phone"])
+            except SMSError:
+                return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
+            if not User.objects.filter(phone=f"+{normalized_phone}", is_active=True).exists():
+                return Response({
+                    "error": "account_not_found",
+                    "message": "No active account exists for this phone number.",
+                }, status=status.HTTP_404_NOT_FOUND)
         if settings.DEMO_MODE:
             try:
                 normalized_phone = normalize_ng(data["phone"])
@@ -94,6 +104,18 @@ class OTPVerifyView(APIView):
         serializer = OTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        login_user = None
+        if data["purpose"] == "login":
+            try:
+                normalized_phone = normalize_ng(data["phone"])
+            except SMSError:
+                return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
+            login_user = User.objects.filter(phone=f"+{normalized_phone}", is_active=True).first()
+            if not login_user:
+                return Response({
+                    "error": "account_not_found",
+                    "message": "No active account exists for this phone number.",
+                }, status=status.HTTP_404_NOT_FOUND)
         try:
             phone = verify_otp(data["phone"], data["purpose"], data["code"])
         except OTPError:
@@ -122,11 +144,8 @@ class OTPVerifyView(APIView):
                 "id": str(user.id), "phone": user.phone, "full_name": user.full_name,
             }})
         if data["purpose"] == "login":
-            user = User.objects.filter(phone=e164, is_active=True).first()
-            if not user:
-                return Response({"error": "invalid_code", "message": "The code is invalid or expired."}, status=400)
-            return Response({"verified": True, "token": AuthToken.issue(user), "user": {
-                "id": str(user.id), "phone": user.phone, "full_name": user.full_name,
+            return Response({"verified": True, "token": AuthToken.issue(login_user), "user": {
+                "id": str(login_user.id), "phone": login_user.phone, "full_name": login_user.full_name,
             }})
         return Response({"verified": True})
 

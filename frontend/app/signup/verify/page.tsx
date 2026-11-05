@@ -69,7 +69,7 @@ export default function Verify() {
       sessionStorage.removeItem("netacess_next");
       r.push(next || (p.mode === "login" ? "/profile" : "/#plans"));
     } catch (x) {
-      const titles: Record<string, string> = { wrong_code: "That code is not right", expired: "This code has expired", too_many_attempts: "Too many attempts", no_code: "No code found" };
+      const titles: Record<string, string> = { wrong_code: "That code is not right", expired: "This code has expired", too_many_attempts: "Too many attempts", no_code: "No code found", account_not_found: "Staff account not found" };
       const e = x as ApiError;
       setErr({ title: titles[e.code] || "Could not verify", body: e.code === "wrong_code" ? "Check the SMS and try again." : e.message });
     } finally { setBusy(false); }
