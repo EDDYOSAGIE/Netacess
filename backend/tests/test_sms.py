@@ -242,6 +242,7 @@ class SMSOTPTests(TestCase):
         }, format="json")
         self.assertEqual(verified.status_code, 200)
         self.assertEqual(verified.data["user"]["id"], str(staff_user.id))
+        self.assertTrue(verified.data["user"]["is_staff"])
         self.assertIn("token", verified.data)
 
     @patch("apps.sms.otp.send_sms_task.delay")

@@ -146,6 +146,7 @@ class OTPVerifyView(APIView):
         if data["purpose"] == "login":
             return Response({"verified": True, "token": AuthToken.issue(login_user), "user": {
                 "id": str(login_user.id), "phone": login_user.phone, "full_name": login_user.full_name,
+                "is_staff": login_user.is_staff,
             }})
         return Response({"verified": True})
 

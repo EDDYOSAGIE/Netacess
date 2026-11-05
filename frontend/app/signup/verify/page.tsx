@@ -53,7 +53,7 @@ export default function Verify() {
     }
     setBusy(true); setErr(null);
     try {
-      const res = await api<{ token: string }>("/api/auth/otp/verify", {
+      const res = await api<{ token: string; user?: { is_staff?: boolean } }>("/api/auth/otp/verify", {
         body: {
           phone: p.phone,
           purpose: p.mode,
@@ -67,7 +67,12 @@ export default function Verify() {
       sessionStorage.removeItem("netacess_signup");
       const next = sessionStorage.getItem("netacess_next");
       sessionStorage.removeItem("netacess_next");
-      r.push(next || (p.mode === "login" ? "/profile" : "/#plans"));
+      const safeNext = next?.startsWith("/") && !next.startsWith("//") ? next : null;
+      if (p.mode === "login" && res.user?.is_staff) {
+        r.push(safeNext && safeNext !== "/profile" ? safeNext : "/admin");
+      } else {
+        r.push(safeNext && safeNext !== "/admin" ? safeNext : (p.mode === "login" ? "/profile" : "/#plans"));
+      }
     } catch (x) {
       const titles: Record<string, string> = { wrong_code: "That code is not right", expired: "This code has expired", too_many_attempts: "Too many attempts", no_code: "No code found", account_not_found: "Staff account not found" };
       const e = x as ApiError;
