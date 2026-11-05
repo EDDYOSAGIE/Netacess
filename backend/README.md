@@ -43,6 +43,7 @@ Set `USE_REDIS=false` to use Django's shared `DatabaseCache` and run tasks inlin
 ## Admin
 Staff are ordinary users with `is_staff`. Create one with `python manage.py createsuperuser` (use your phone number, e.g. +2348012345678),
 then log in on the website with the SMS code. An Admin button appears in the profile and opens /admin on the frontend.
+For controlled demo accounts, use `python manage.py provision_demo_staff <+234...> ...` after deployment; it creates staff-only users and prints the phone allowlist to configure. This is data provisioning, not a schema migration. See the repository `DEPLOYMENT.md` for the Render procedure.
 The admin screen shows the review queue, all payments with a timeline, provider on/off switches and the audit log.
 Approve, fail, refund and provider switches all require a written reason, saved to the audit log with the staff member's name.
 Django's own admin at /admin on the backend (port 8000) is still available for raw data.

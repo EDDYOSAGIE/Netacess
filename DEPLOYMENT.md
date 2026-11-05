@@ -49,6 +49,14 @@ Generate the Fernet value locally with `python -c "from cryptography.fernet impo
 
 Staff use the same phone OTP login as customers; there is no separate admin OTP. Use a dedicated demo phone you control, add it to `DEMO_PHONE_ALLOWLIST` in the Render API environment, and save/redeploy so the demo OTP endpoint accepts it. The phone must use Nigerian international format such as `+2348012345678`.
 
+After deploying the current code, open the Render API service's **Shell** (working directory `backend`) and provision the five demo staff accounts with:
+
+```sh
+python manage.py provision_demo_staff PHONE_1 PHONE_2 PHONE_3 PHONE_4 PHONE_5
+```
+
+Replace each `PHONE_n` with one exact number in `+234` plus 10-digit format, separated by spaces. The command creates active staff accounts without Django superuser privileges, is safe to rerun, and prints the exact comma-separated `DEMO_PHONE_ALLOWLIST` value. Copy that output into the Render API environment variable, save it, and redeploy. This provisions database rows; **it is not a migration**, and no new migration is needed. If a number already belongs to a non-staff account, the command stops without changing any accounts; use a different number or explicitly decide to promote that existing account through the separately documented promotion procedure.
+
 In the Render API service's **Shell** (working directory `backend`), create a staff account:
 
 ```sh
