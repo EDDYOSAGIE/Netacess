@@ -11,18 +11,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const [ok, setOk] = useState(false);
   useEffect(() => {
-    if (!auth.get()) { sessionStorage.setItem("netacess_next", "/admin"); r.replace("/login"); return; }
+    if (!auth.get()) { sessionStorage.setItem("netacess_next", "/admin"); r.replace("/staff-login"); return; }
     api<{ is_staff: boolean }>("/api/me").then((m) => {
       if (m.is_staff) setOk(true);
       else {
         auth.clear();
         sessionStorage.setItem("netacess_next", "/admin");
-        r.replace("/login");
+        r.replace("/staff-login");
       }
     }).catch(() => {
       auth.clear();
       sessionStorage.setItem("netacess_next", "/admin");
-      r.replace("/login");
+      r.replace("/staff-login");
     });
   }, [r]);
   if (!ok) return <div className="center"><div className="spinner" /></div>;

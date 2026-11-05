@@ -6,7 +6,7 @@ import { Header } from "@/components/Header";
 import { api, ApiError, auth } from "@/lib/api";
 import { Steps } from "@/components/Steps";
 
-type Pending = { phone: string; full_name: string; email: string; mode: "signup" | "login"; policies_accepted?: boolean; demoCode?: string };
+type Pending = { phone: string; full_name: string; email: string; mode: "signup" | "login"; login_for?: "customer" | "staff"; policies_accepted?: boolean; demoCode?: string };
 
 export default function Verify() {
   const r = useRouter();
@@ -74,7 +74,7 @@ export default function Verify() {
         r.push(safeNext && safeNext !== "/admin" ? safeNext : (p.mode === "login" ? "/profile" : "/#plans"));
       }
     } catch (x) {
-      const titles: Record<string, string> = { wrong_code: "That code is not right", expired: "This code has expired", too_many_attempts: "Too many attempts", no_code: "No code found", account_not_found: "Staff account not found" };
+      const titles: Record<string, string> = { wrong_code: "That code is not right", expired: "This code has expired", too_many_attempts: "Too many attempts", no_code: "No code found", account_not_found: p?.login_for === "staff" ? "Staff account not found" : "Account not found" };
       const e = x as ApiError;
       setErr({ title: titles[e.code] || "Could not verify", body: e.code === "wrong_code" ? "Check the SMS and try again." : e.message });
     } finally { setBusy(false); }
@@ -118,7 +118,7 @@ export default function Verify() {
           <div className="row" style={{ fontSize: 14 }}>
             {wait > 0 ? <span className="hint" style={{ fontSize: 14 }}>Resend code in 0:{String(wait).padStart(2, "0")}</span>
               : <button onClick={resend} style={{ background: "none", border: 0, color: "var(--blue)", fontWeight: 700, padding: 0, fontSize: 14 }}>Resend code</button>}
-            <Link href={p?.mode === "login" ? "/login" : "/signup"} style={{ color: "var(--blue)", fontWeight: 700 }}>Change phone number</Link>
+            <Link href={p?.mode === "login" ? (p.login_for === "staff" ? "/staff-login" : "/login") : "/signup"} style={{ color: "var(--blue)", fontWeight: 700 }}>Change phone number</Link>
           </div>
         </form>
       </div>
