@@ -4,11 +4,21 @@ export const auth = {
   get(): string | null {
     try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
   },
-  set(t: string) { try { localStorage.setItem(TOKEN_KEY, t); } catch {} },
-  clear() { try { localStorage.removeItem(TOKEN_KEY); } catch {} },
-  endSession() {
-    this.clear();
+  set(t: string) {
     try {
+      localStorage.setItem(TOKEN_KEY, t);
+      localStorage.setItem("netacess_last_activity", String(Date.now()));
+    } catch {}
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("netacess:token-change"));
+  },
+  clear() {
+    try { localStorage.removeItem(TOKEN_KEY); } catch {}
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("netacess:token-change"));
+  },
+  endSession() {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem("netacess_last_activity");
       sessionStorage.removeItem("netacess_next");
       sessionStorage.removeItem("netacess_signup");
       sessionStorage.removeItem("netacess_payment");

@@ -36,26 +36,32 @@ The Blueprint sets the non-secret defaults and generates `DJANGO_SECRET_KEY`. Co
 | `DATABASE_URL` | Automatically linked to the Blueprint PostgreSQL database |
 | `USE_REDIS` | `false` for the simplest demo; set `true` only after configuring Redis as below |
 | `DEMO_MODE` | `true` for the controlled demo |
-| `DEMO_PHONE_ALLOWLIST` | Comma-separated demo phone numbers, e.g. `+2348012345678,+2348098765432` |
-| `SMS_PROVIDER` | `console` for demo OTP response; use a real provider for live SMS |
+| `SMS_PROVIDER` | `console` for local/demo only; configure `termii` and its credentials for actual post-payment SMS |
+| `EMAIL_BACKEND` | `django.core.mail.backends.smtp.EmailBackend` |
+| `EMAIL_HOST` | Your SMTP provider hostname |
+| `EMAIL_PORT` | `587` for SMTP submission |
+| `EMAIL_HOST_USER` | SMTP username |
+| `EMAIL_HOST_PASSWORD` | SMTP password or provider token; keep secret |
+| `EMAIL_USE_TLS` | `true` |
+| `DEFAULT_FROM_EMAIL` | Verified sender address, e.g. `Netacess <no-reply@example.com>` |
 | `ACCESS_CODE_ENC_KEY` | A generated Fernet key; keep stable or stored access codes cannot be decrypted |
 | `FLUTTERWAVE_SECRET_KEY` | Flutterwave **test** secret key |
 | `FLUTTERWAVE_WEBHOOK_HASH` | Flutterwave **test** webhook hash |
 | `FRONTEND_URL` | Exact Vercel origin, e.g. `https://netacess-demo.vercel.app`, no trailing slash |
 
-Generate the Fernet value locally with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Enter the result directly into Render; do not commit it. The API returns OTP codes only for numbers in `DEMO_PHONE_ALLOWLIST`. Keep this limited to demo participants. Configure the Flutterwave test webhook URL as `https://<render-service>.onrender.com/api/webhooks/flutterwave`.
+Generate the Fernet value locally with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Enter the result directly into Render; do not commit it. Signup and sign-in codes are emailed and are never returned by the API or shown on the website. SMTP must be configured for users to receive them. Configure the Flutterwave test webhook URL as `https://<render-service>.onrender.com/api/webhooks/flutterwave`.
 
 ### Create a Demo Staff Account
 
-Staff use the same phone OTP login as customers; there is no separate admin OTP. Use a dedicated demo phone you control, add it to `DEMO_PHONE_ALLOWLIST` in the Render API environment, and save/redeploy so the demo OTP endpoint accepts it. The phone must use Nigerian international format such as `+2348012345678`.
+Staff use the same email OTP login as customers; there is no separate admin OTP. Have an inbox available for each staff account. The phone number remains required for receiving payment access codes by SMS.
 
 After deploying the current code, open the Render API service's **Shell** (working directory `backend`) and provision the five demo staff accounts with:
 
 ```sh
-python manage.py provision_demo_staff PHONE_1 PHONE_2 PHONE_3 PHONE_4 PHONE_5
+python manage.py provision_demo_staff PHONE_1 PHONE_2 PHONE_3 PHONE_4 PHONE_5 --emails EMAIL_1 EMAIL_2 EMAIL_3 EMAIL_4 EMAIL_5
 ```
 
-Replace each `PHONE_n` with one exact number in `+234` plus 10-digit format, separated by spaces. The command creates active staff accounts without Django superuser privileges, is safe to rerun, and prints the exact comma-separated `DEMO_PHONE_ALLOWLIST` value. Copy that output into the Render API environment variable, save it, and redeploy. This provisions database rows; **it is not a migration**, and no new migration is needed. If a number already belongs to a non-staff account, the command stops without changing any accounts; use a different number or explicitly decide to promote that existing account through the separately documented promotion procedure.
+Replace each `PHONE_n` with one exact number in `+234` plus 10-digit format and each `EMAIL_n` with that staff member's unique email address, in matching order. The command creates active staff accounts without Django superuser privileges and is safe to rerun; it updates emails on existing staff accounts. This provisions database rows; **it is not a migration**, and no new migration is needed. If a number or email already belongs to a non-staff/other account, the command stops without changing accounts.
 
 In the Render API service's **Shell** (working directory `backend`), create a staff account:
 
@@ -63,7 +69,7 @@ In the Render API service's **Shell** (working directory `backend`), create a st
 python manage.py createsuperuser
 ```
 
-Enter the same allowlisted phone number when prompted, then set a strong password when asked. Website staff sign-in uses the phone OTP; the password is required for the Django superuser account but is not entered in the website OTP flow.
+Enter the staff phone, email, and a strong password when prompted. Website staff sign-in uses the email OTP; the password is required for the Django superuser account but is not entered in the website OTP flow.
 
 If that phone already has a normal user account, do not create a duplicate. Promote the existing account in Render Shell instead, replacing the example phone with the exact account phone:
 
@@ -71,11 +77,15 @@ If that phone already has a normal user account, do not create a duplicate. Prom
 python manage.py shell -c "from apps.accounts.models import User; u = User.objects.get(phone='+2348012345678'); u.is_staff = True; u.is_superuser = True; u.is_active = True; u.save(update_fields=['is_staff', 'is_superuser', 'is_active'])"
 ```
 
-Then open `https://<your-vercel-domain>/admin`. It redirects you to `/login`; enter the allowlisted phone and use the demo OTP returned by the API. After login, the app returns staff accounts to `/admin`. A regular customer account is redirected to `/profile`, so verify `is_staff` is enabled if you cannot enter the staff page. Keep the demo phone allowlist restricted to the people conducting the demo and remove numbers that are no longer needed.
+Then open `https://<your-vercel-domain>/admin`. It redirects you to `/staff-login`; enter the staff email and use the code delivered to that inbox. After login, the app returns staff accounts to `/admin`. A regular customer account is redirected to `/profile`, so verify `is_staff` is enabled if you cannot enter the staff page.
 
-### Signup OTP Returns 500
+### Email OTP Is Not Received
 
-The OTP rate limiter uses Django's configured cache before it generates a code. With `USE_REDIS=false`, that cache is the `django_cache` database table. If Render's pre-deploy migration/cache-table step did not run successfully, OTP send requests can fail before reaching the SMS/demo code. The Blueprint already runs `python manage.py migrate && python manage.py createcachetable`; confirm both commands succeeded in the latest deploy logs.
+Confirm `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, and `DEFAULT_FROM_EMAIL` are configured on the Render API. Check the sender/domain verification and SMTP provider logs. The default local email backend prints messages to server output and does not deliver them to an inbox. A 502 from `/api/auth/otp/send` indicates email delivery failed; a 429 indicates a rate limit or resend cooldown.
+
+### OTP Request Returns 503
+
+The OTP rate limiter and expiring code use Django's configured cache. With `USE_REDIS=false`, that cache is the `django_cache` database table. If Render's pre-deploy migration/cache-table step did not run successfully, OTP send requests can fail before email delivery. The Blueprint already runs `python manage.py migrate && python manage.py createcachetable`; confirm both commands succeeded in the latest deploy logs.
 
 To repair a missing table, open the Render API service's **Shell** (working directory should be `backend`) and run:
 
@@ -86,7 +96,7 @@ python manage.py createcachetable
 
 Then retry `https://<render-service>.onrender.com/health/`; it should return `{"status":"ok","database":"ok","cache":"ok"}`. If it still returns 503, check the API service's runtime logs. When `USE_REDIS=true`, do not create the database cache table to fix this; verify `REDIS_URL` is correct and reachable and is set on the API. Cache or task-broker infrastructure failures are logged with a safe error class and the OTP API returns 503 rather than an opaque 500 after this update.
 
-In the browser Network panel, inspect the failed `/api/auth/otp/send` response. A 403 `demo_number_not_allowed` means the phone needs to be added to `DEMO_PHONE_ALLOWLIST`; a 429 means a rate limit/cooldown; a 503 points to cache, Redis, database, or task-broker availability. Do not paste API keys or full secret-bearing environment values into support messages.
+In the browser Network panel, inspect the failed `/api/auth/otp/send` response. A 429 means a rate limit/cooldown; a 502 indicates SMTP delivery failure; a 503 points to cache, Redis, or database availability. Do not paste API keys or full secret-bearing environment values into support messages.
 
 ### Redis and Celery
 
@@ -100,12 +110,12 @@ To enable background and scheduled jobs:
 2. On the Django web service set `USE_REDIS=true` and `REDIS_URL=<internal Redis URL>`.
 3. Create a Render **Background Worker** with Root Directory `backend`, Build Command `pip install -r requirements.txt`, and Start Command `celery -A config worker --loglevel=info --concurrency=2`.
 4. Create a second **Background Worker** for the scheduler, with the same Root Directory and Build Command, and Start Command `celery -A config beat --loglevel=info`.
-5. Give both worker services the same `DATABASE_URL`, `REDIS_URL`, `USE_REDIS=true`, `DJANGO_DEBUG=0`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_TRUST_X_FORWARDED_PROTO`, `DEMO_MODE`, `DEMO_PHONE_ALLOWLIST`, `SMS_PROVIDER`, `ACCESS_CODE_ENC_KEY`, `FLUTTERWAVE_SECRET_KEY`, and `FLUTTERWAVE_WEBHOOK_HASH` values as the API. Do not run more than one Beat scheduler for this app.
+5. Give both worker services the same `DATABASE_URL`, `REDIS_URL`, `USE_REDIS=true`, `DJANGO_DEBUG=0`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_TRUST_X_FORWARDED_PROTO`, `DEMO_MODE`, `SMS_PROVIDER`, `ACCESS_CODE_ENC_KEY`, `FLUTTERWAVE_SECRET_KEY`, and `FLUTTERWAVE_WEBHOOK_HASH` values as the API. Add SMTP values if worker tasks need email delivery. Do not run more than one Beat scheduler for this app.
 6. Redeploy the API and both workers. Check the worker logs for successful broker/database connections and the Beat logs for scheduled tasks.
 
-With Redis enabled, OTP throttles and OTP state are shared across API instances, SMS failures can retry, and Celery Beat schedules payment reconciliation, stale-review reminders, subscription reminders, and demo SMS reminders. Render may charge separately for the Redis service and each worker; check the current plan/pricing before creating them. If using a Redis provider that requires TLS, preserve the provider's `rediss://` URL exactly.
+With Redis enabled, OTP throttles and OTP state are shared across API instances, SMS failures can retry, and Celery Beat schedules payment reconciliation, stale-review reminders, subscription reminders, and SMS reminders. Render may charge separately for the Redis service and each worker; check the current plan/pricing before creating them. If using a Redis provider that requires TLS, preserve the provider's `rediss://` URL exactly.
 
-`DJANGO_DEBUG` stays off even in demo mode. The console SMS provider is allowed only because `DEMO_MODE=true`; code disclosure is still restricted to the configured demo numbers. For production, turn demo mode off and configure a real SMS provider and approved sender details.
+`DJANGO_DEBUG` stays off even in demo mode. In demo mode, the console SMS provider redacts access codes and does not deliver a real text message. Configure a real SMS provider and approved sender details whenever customers must receive payment access codes by SMS. Signup/sign-in codes are delivered by SMTP and are never disclosed in API responses.
 
 ## Vercel Frontend
 
@@ -131,13 +141,13 @@ With Redis enabled, OTP throttles and OTP state are shared across API instances,
 After both services are deployed:
 
 1. Open `https://<render-service>.onrender.com/health/`; expect `{"status":"ok","database":"ok","cache":"ok"}`.
-2. Open the Vercel site, load plans, and verify signup requests an OTP for a number in `DEMO_PHONE_ALLOWLIST`.
-3. Confirm the OTP appears only for an allowlisted demo phone; a different phone must receive an error and no code.
+2. Open the Vercel site, load plans, and verify signup sends an OTP to the supplied email address.
+3. Confirm the code is delivered to email and does not appear in the API response or website UI.
 4. Finish signup, confirm the terms/privacy acceptance is stored, then test login and profile access.
 5. Complete a checkout using Flutterwave test credentials and verify the resulting payment and access code.
-6. Confirm the Flutterwave test webhook points to `https://<render-service>.onrender.com/api/webhooks/flutterwave` and uses the configured test webhook hash.
+6. Confirm the payment access code appears on the website and is delivered to the account phone by SMS. Confirm the Flutterwave test webhook points to `https://<render-service>.onrender.com/api/webhooks/flutterwave` and uses the configured test webhook hash.
 
-Do not treat a successful Vercel build or `/health/` response as proof that SMS, payment callbacks, refunds, or consumer/legal requirements are production-ready. Use provider test accounts and keep the demo phone allowlist limited to the people conducting the demo.
+Do not treat a successful Vercel build or `/health/` response as proof that SMTP, SMS, payment callbacks, refunds, or consumer/legal requirements are production-ready. Use provider test accounts and verify both email and SMS delivery.
 
 ## Local CI-equivalent Checks
 

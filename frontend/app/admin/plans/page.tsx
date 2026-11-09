@@ -43,6 +43,7 @@ export default function AdminPlans() {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [productBusy, setProductBusy] = useState<string | null>(null);
+  const [availabilityBusy, setAvailabilityBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -90,6 +91,18 @@ export default function AdminPlans() {
     finally { setProductBusy(null); }
   }
 
+  async function setAvailability(plan: AdminPlan, active: boolean) {
+    const action = active ? "restore" : "remove";
+    if (!window.confirm(`${active ? "Restore" : "Remove"} ${plan.name} ${active ? "for" : "from"} all customers?`)) return;
+    setAvailabilityBusy(plan.id); setError(""); setNotice("");
+    try {
+      await api(`/api/admin/plans/${plan.id}`, { method: "PATCH", body: { is_active: active } });
+      await load();
+      setNotice(active ? `${plan.name} is available to all customers.` : `${plan.name} was removed from all customer accounts.`);
+    } catch (e) { setError((e as ApiError).message); }
+    finally { setAvailabilityBusy(null); }
+  }
+
   return (
     <AdminShell>
       <div className="row">
@@ -127,6 +140,7 @@ export default function AdminPlans() {
             <td>{plan.espees_payment_ref ? <><code>{plan.espees_payment_ref}</code><div><a href={`https://payment.espees.org/pay/${encodeURIComponent(plan.espees_payment_ref)}`} target="_blank" rel="noreferrer" style={{ color: "var(--blue)", fontWeight: 700 }}>Open Espees payment page</a></div><span className="hint">SKU: {plan.espees_product_sku}</span></> : <span className="hint">Not created</span>}</td>
             <td><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               <button className="btn ghost sm" onClick={() => startEdit(plan)}>Edit</button>
+              <button className={`btn sm ${plan.is_active ? "bad" : "ghost"}`} disabled={availabilityBusy === plan.id} onClick={() => setAvailability(plan, !plan.is_active)}>{availabilityBusy === plan.id ? "Saving…" : plan.is_active ? "Remove" : "Restore"}</button>
               <button className="btn sm" disabled={productBusy === plan.id} onClick={() => createEspeesProduct(plan)}>{productBusy === plan.id ? "Creating…" : plan.espees_payment_ref ? "Recreate Espees product" : "Create Espees product"}</button>
             </div></td>
           </tr>)}</tbody>

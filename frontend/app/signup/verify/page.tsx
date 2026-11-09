@@ -6,7 +6,7 @@ import { Header } from "@/components/Header";
 import { api, ApiError, auth } from "@/lib/api";
 import { Steps } from "@/components/Steps";
 
-type Pending = { phone: string; full_name: string; email: string; mode: "signup" | "login"; login_for?: "customer" | "staff"; policies_accepted?: boolean; demoCode?: string };
+type Pending = { phone?: string; full_name: string; email: string; mode: "signup" | "login"; login_for?: "customer" | "staff"; policies_accepted?: boolean };
 
 export default function Verify() {
   const r = useRouter();
@@ -55,11 +55,11 @@ export default function Verify() {
     try {
       const res = await api<{ token: string; user?: { is_staff?: boolean } }>("/api/auth/otp/verify", {
         body: {
-          phone: p.phone,
+          ...(p.phone ? { phone: p.phone } : {}),
+          email: p.email,
           purpose: p.mode,
           code,
           full_name: p.full_name,
-          email: p.email,
           ...(p.mode === "signup" ? { password, policies_accepted: p.policies_accepted === true } : {}),
         },
       });
@@ -84,27 +84,25 @@ export default function Verify() {
     if (!p) return;
     setErr(null);
     try {
-      const result = await api<{ code?: string }>("/api/auth/otp/send", { body: { phone: p.phone, purpose: p.mode } });
-      setP({ ...p, demoCode: result.code }); setWait(60); setDigits(Array(6).fill("")); refs.current[0]?.focus();
-      sessionStorage.setItem("netacess_signup", JSON.stringify({ ...p, demoCode: result.code }));
+      await api("/api/auth/otp/send", { body: { ...(p.phone ? { phone: p.phone } : {}), email: p.email, purpose: p.mode } });
+      setWait(60); setDigits(Array(6).fill("")); refs.current[0]?.focus();
     }
     catch (x) { setErr({ title: "Could not resend", body: (x as ApiError).message }); }
   }
 
-  const masked = p ? p.phone.replace(/^(.{4}).*(.{4})$/, "$1 ••• $2") : "";
+  const masked = p ? p.email.replace(/^(.{2})[^@]*(@.*)$/, "$1•••$2") : "";
   return (
     <>
       <Header />
       <div className="authwrap">
         <div className="authintro">
-          <h1>Check your phone</h1>
-          <p className="lead">We sent a 6-digit code by SMS to confirm your number. Enter it to finish.</p>
+          <h1>Check your email</h1>
+          <p className="lead">We sent a 6-digit verification code to your email. Enter it to finish.</p>
           {p?.mode === "signup" && <Steps at={2} />}
         </div>
         <form className="card authcard" onSubmit={verify}>
           <h2>Enter the 6-digit code</h2>
           <p className="lead" style={{ fontSize: 15 }}>Sent to <b style={{ color: "var(--ink)" }}>{masked}</b>. The code is valid for 5 minutes.</p>
-          {p?.demoCode && <div className="alert" role="status">Demo only: your code is {p.demoCode}</div>}
           <div className={`otp ${err ? "err" : ""}`}>
             {digits.map((d, i) => (
               <input key={i} ref={(el) => { refs.current[i] = el; }} value={d} inputMode="numeric" autoComplete={i === 0 ? "one-time-code" : "off"}
@@ -118,7 +116,7 @@ export default function Verify() {
           <div className="row" style={{ fontSize: 14 }}>
             {wait > 0 ? <span className="hint" style={{ fontSize: 14 }}>Resend code in 0:{String(wait).padStart(2, "0")}</span>
               : <button onClick={resend} style={{ background: "none", border: 0, color: "var(--blue)", fontWeight: 700, padding: 0, fontSize: 14 }}>Resend code</button>}
-            <Link href={p?.mode === "login" ? (p.login_for === "staff" ? "/staff-login" : "/login") : "/signup"} style={{ color: "var(--blue)", fontWeight: 700 }}>Change phone number</Link>
+            <Link href={p?.mode === "login" ? (p.login_for === "staff" ? "/staff-login" : "/login") : "/signup"} style={{ color: "var(--blue)", fontWeight: 700 }}>Change email</Link>
           </div>
         </form>
       </div>
