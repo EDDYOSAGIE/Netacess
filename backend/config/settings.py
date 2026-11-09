@@ -130,18 +130,13 @@ TERMII_SENDER_ID = env("TERMII_SENDER_ID", "N-Alert")
 TERMII_CHANNEL = env("TERMII_CHANNEL", "dnd")
 SMS_ALLOWLIST = [n.strip() for n in env("SMS_ALLOWLIST").split(",") if n.strip()]
 DEMO_MODE = env("DEMO_MODE", "false").lower() == "true"
-DEMO_PHONE_ALLOWLIST = {
-    number.strip().lstrip("+") for number in env("DEMO_PHONE_ALLOWLIST").split(",") if number.strip()
-}
-if not DEBUG and DEMO_MODE:
-    if not DEMO_PHONE_ALLOWLIST:
-        raise ImproperlyConfigured("DEMO_PHONE_ALLOWLIST is required when DEMO_MODE is enabled")
 if not DEBUG and SMS_PROVIDER == "console" and not DEMO_MODE:
     raise ImproperlyConfigured("Configure a real SMS_PROVIDER before running in production")
 OTP_TTL_SECONDS = 300
 OTP_MAX_ATTEMPTS = 5
 OTP_RESEND_SECONDS = 60
 OTP_MAX_PER_HOUR = 3
+AUTH_IDLE_TIMEOUT_SECONDS = 3600
 ACCESS_CODE_ENC_KEY = env("ACCESS_CODE_ENC_KEY")
 FLUTTERWAVE_SECRET_KEY = env("FLUTTERWAVE_SECRET_KEY")
 FLUTTERWAVE_WEBHOOK_HASH = env("FLUTTERWAVE_WEBHOOK_HASH")

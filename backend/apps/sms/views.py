@@ -7,19 +7,27 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.email_otp import EmailOTPError, send_email_otp, verify_email_otp
 from apps.accounts.models import AuthToken, PolicyAcceptance, User
 from apps.accounts.policies import PRIVACY_VERSION, TERMS_VERSION
 
-from .otp import OTPError, PURPOSES, send_otp, verify_otp
-from .providers import SMSError, normalize_ng
-from .throttles import CacheUnavailable, OTPPhoneIPThrottle
+from .throttles import CacheUnavailable, OTPEmailIPThrottle
 
 log = logging.getLogger(__name__)
 
 
 class OTPDataSerializer(serializers.Serializer):
-    phone = serializers.CharField()
-    purpose = serializers.ChoiceField(choices=PURPOSES, required=False, default="signup")
+    email = serializers.EmailField()
+    phone = serializers.CharField(required=False, allow_blank=True, default="")
+    purpose = serializers.ChoiceField(choices=("signup", "login", "reset", "phone_change"), required=False, default="signup")
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate(self, attrs):
+        if attrs["purpose"] == "signup" and not attrs.get("phone"):
+            raise serializers.ValidationError({"phone": "A phone number is required for payment code delivery."})
+        return attrs
 
 
 class OTPVerifySerializer(OTPDataSerializer):
@@ -36,6 +44,8 @@ class OTPVerifySerializer(OTPDataSerializer):
                 errors["policies_accepted"] = "You must agree to the Terms and acknowledge the Privacy Notice."
             if not attrs.get("password"):
                 errors["password"] = "A password is required to create an account."
+            if not attrs.get("phone"):
+                errors["phone"] = "A phone number is required for payment code delivery."
             if errors:
                 raise serializers.ValidationError(errors)
         return attrs
@@ -44,55 +54,45 @@ class OTPVerifySerializer(OTPDataSerializer):
 class OTPSendView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [OTPPhoneIPThrottle]
+    throttle_classes = [OTPEmailIPThrottle]
 
     def post(self, request):
         serializer = OTPDataSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        if data["purpose"] == "signup":
+            if User.objects.filter(email__iexact=data["email"]).exists():
+                return Response({"error": "email_in_use", "message": "An account already uses this email."}, status=400)
+            if data.get("phone"):
+                from .providers import SMSError, normalize_ng
+                try:
+                    phone = "+" + normalize_ng(data["phone"])
+                except SMSError:
+                    return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
+                if User.objects.filter(phone=phone).exists():
+                    return Response({"error": "phone_in_use", "message": "An account already uses this phone number."}, status=400)
         if data["purpose"] == "login":
-            try:
-                normalized_phone = normalize_ng(data["phone"])
-            except SMSError:
-                return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
-            if not User.objects.filter(phone=f"+{normalized_phone}", is_active=True).exists():
+            matches = User.objects.filter(email__iexact=data["email"], is_active=True)
+            if matches.count() > 1:
+                return Response({
+                    "error": "email_not_unique",
+                    "message": "This email is linked to more than one account. Contact support to update your account email.",
+                }, status=status.HTTP_409_CONFLICT)
+            if not matches.exists():
                 return Response({
                     "error": "account_not_found",
-                    "message": "No active account exists for this phone number.",
+                    "message": "No active account exists for this email.",
                 }, status=status.HTTP_404_NOT_FOUND)
-        if settings.DEMO_MODE:
-            try:
-                normalized_phone = normalize_ng(data["phone"])
-            except SMSError:
-                return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
-            if normalized_phone not in settings.DEMO_PHONE_ALLOWLIST:
-                return Response({"error": "demo_number_not_allowed", "message": "This demo number is not enabled."}, status=403)
         try:
-            code, sms_sent, provider_error = send_otp(
-                data["phone"], data["purpose"], request.META.get("REMOTE_ADDR", ""),
-            )
-        except SMSError as exc:
-            message = str(exc)
-            throttled = "wait" in message.lower()
-            return Response({"error": "sms_unavailable", "message": message},
-                            status=status.HTTP_429_TOO_MANY_REQUESTS if throttled else status.HTTP_400_BAD_REQUEST)
+            send_email_otp(data["email"], data["purpose"])
+        except EmailOTPError as exc:
+            code = status.HTTP_429_TOO_MANY_REQUESTS if exc.code == "too_soon" else status.HTTP_502_BAD_GATEWAY
+            return Response({"error": exc.code, "message": exc.message}, status=code)
         except Exception as exc:
             log.error("OTP request infrastructure unavailable (%s)", type(exc).__name__)
             raise CacheUnavailable() from None
-        result = {
-            "sent": True,
-            "sms_sent": sms_sent,
-            "expires_in": settings.OTP_TTL_SECONDS,
-            "resend_after": settings.OTP_RESEND_SECONDS,
-        }
-        if not sms_sent:
-            log.error("OTP SMS delivery failed: %s", provider_error)
-            if not settings.DEMO_MODE:
-                return Response({"error": "sms_unavailable", "message": "Could not send SMS right now"},
-                                status=status.HTTP_502_BAD_GATEWAY)
-        if settings.DEMO_MODE:
-            result["code"] = code
-        return Response(result, status=status.HTTP_200_OK)
+        return Response({"sent": True, "expires_in": settings.OTP_TTL_SECONDS,
+                         "resend_after": settings.OTP_RESEND_SECONDS}, status=status.HTTP_200_OK)
 
 
 class OTPVerifyView(APIView):
@@ -106,34 +106,35 @@ class OTPVerifyView(APIView):
         data = serializer.validated_data
         login_user = None
         if data["purpose"] == "login":
-            try:
-                normalized_phone = normalize_ng(data["phone"])
-            except SMSError:
-                return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
-            login_user = User.objects.filter(phone=f"+{normalized_phone}", is_active=True).first()
+            matches = User.objects.filter(email__iexact=data["email"], is_active=True)
+            if matches.count() > 1:
+                return Response({
+                    "error": "email_not_unique",
+                    "message": "This email is linked to more than one account. Contact support to update your account email.",
+                }, status=status.HTTP_409_CONFLICT)
+            login_user = matches.first()
             if not login_user:
                 return Response({
                     "error": "account_not_found",
-                    "message": "No active account exists for this phone number.",
+                    "message": "No active account exists for this email.",
                 }, status=status.HTTP_404_NOT_FOUND)
         try:
-            phone = verify_otp(data["phone"], data["purpose"], data["code"])
-        except OTPError:
+            verify_email_otp(data["email"], data["purpose"], data["code"])
+        except EmailOTPError:
             return Response({"error": "invalid_code", "message": "The code is invalid or expired."}, status=400)
 
-        e164 = "+" + phone
         if data["purpose"] == "signup":
+            from .providers import SMSError, normalize_ng
+            try:
+                e164 = "+" + normalize_ng(data["phone"])
+            except SMSError:
+                return Response({"error": "invalid_phone", "message": "Enter a valid phone number."}, status=400)
             with transaction.atomic():
-                user, created = User.objects.get_or_create(
-                    phone=e164, defaults={"full_name": data["full_name"], "email": data["email"]},
+                if User.objects.filter(email__iexact=data["email"]).exists() or User.objects.filter(phone=e164).exists():
+                    return Response({"error": "account_exists", "message": "An account already uses this email or phone."}, status=400)
+                user = User.objects.create_user(
+                    e164, data["password"], full_name=data["full_name"], email=data["email"],
                 )
-                if created:
-                    user.set_password(data["password"])
-                user.is_phone_verified = True
-                fields = ["is_phone_verified"]
-                if created:
-                    fields.append("password")
-                user.save(update_fields=fields)
                 PolicyAcceptance.objects.create(
                     user=user,
                     terms_version=TERMS_VERSION,

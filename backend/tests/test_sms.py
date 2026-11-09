@@ -1,5 +1,6 @@
 import hashlib
 import io
+import re
 from contextlib import redirect_stdout
 from datetime import timedelta
 from decimal import Decimal
@@ -24,12 +25,16 @@ from apps.sms.tasks import send_sms_task
 
 
 @override_settings(DEBUG=True, SMS_PROVIDER="console", SMS_ALLOWLIST=[], DEMO_MODE=False,
-                   DEMO_PHONE_ALLOWLIST=set())
+                   DEMO_PHONE_ALLOWLIST=set(), EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class SMSOTPTests(TestCase):
     def setUp(self):
         call_command("createcachetable", verbosity=0)
         cache.clear()
         self.client = APIClient()
+
+    def email_code(self):
+        from django.core import mail
+        return re.search(r"code is (\d{6})", mail.outbox[-1].body).group(1)
 
     def test_normalize_ng(self):
         self.assertEqual(normalize_ng("+234 801-234-5678"), "2348012345678")
@@ -113,72 +118,27 @@ class SMSOTPTests(TestCase):
         with self.assertRaises(SMSError):
             send_otp("08012345678", "signup", "127.0.0.1")
 
-    @override_settings(DEMO_MODE=True, DEMO_PHONE_ALLOWLIST={"2348012345678"})
+    @override_settings(DEMO_MODE=True)
     @patch("apps.sms.otp.send_sms_task.delay")
-    def test_demo_response_includes_code(self, delay):
-        response = self.client.post("/api/auth/otp/send", {"phone": "08012345678", "purpose": "signup"}, format="json")
+    def test_demo_response_never_includes_email_code(self, sms):
+        response = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345678", "email": "demo@example.com", "purpose": "signup",
+        }, format="json")
         self.assertEqual(response.status_code, 200)
-        self.assertRegex(response.data["code"], r"^\d{6}$")
-        self.assertTrue(response.data["sms_sent"])
-        self.assertIn(response.data["code"], delay.call_args.args[1])
-
-    @override_settings(DEBUG=False, DEMO_MODE=True, SMS_PROVIDER="console",
-                       DEMO_PHONE_ALLOWLIST={"2348012345678"}, USE_REDIS=False,
-                       CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-    @patch("apps.sms.tasks.get_provider")
-    def test_deployed_demo_allows_only_configured_phone(self, provider):
-        provider.return_value.send.return_value = "console-fake-id"
-        allowed = self.client.post("/api/auth/otp/send", {
-            "phone": "+2348012345678", "purpose": "signup",
-        }, format="json")
-        self.assertEqual(allowed.status_code, 200)
-        self.assertRegex(allowed.data["code"], r"^\d{6}$")
-
-        rejected = self.client.post("/api/auth/otp/send", {
-            "phone": "+2348099999999", "purpose": "signup",
-        }, format="json")
-        self.assertEqual(rejected.status_code, 403)
-        self.assertNotIn("code", rejected.data)
-        self.assertEqual(provider.return_value.send.call_count, 1)
-
-    @override_settings(DEMO_MODE=True, DEMO_PHONE_ALLOWLIST={"2348012345678"},
-                       USE_REDIS=False, CELERY_TASK_ALWAYS_EAGER=True,
-                       CELERY_TASK_EAGER_PROPAGATES=True, SMS_PROVIDER="termii",
-                       TERMII_API_KEY="do-not-return-or-log")
-    @patch("apps.sms.tasks.get_provider", side_effect=SMSError("sender rejected"))
-    def test_provider_failure_in_demo_returns_code_and_keeps_otp_verifiable(self, provider):
-        with self.assertLogs("apps.sms", level="ERROR") as captured:
-            response = self.client.post("/api/auth/otp/send", {
-                "phone": "08012345678", "purpose": "signup",
-            }, format="json")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.data["sms_sent"])
-        self.assertRegex(response.data["code"], r"^\d{6}$")
-        self.assertNotIn("do-not-return-or-log", response.content.decode())
-        self.assertNotIn("do-not-return-or-log", "\n".join(captured.output))
-        verified = self.client.post("/api/auth/otp/verify", {
-            "phone": "08012345678", "purpose": "signup", "code": response.data["code"],
-            "password": "valid-password-123", "policies_accepted": True,
-        }, format="json")
-        self.assertEqual(verified.status_code, 200)
-
-    @override_settings(DEMO_MODE=False, USE_REDIS=False, CELERY_TASK_ALWAYS_EAGER=True,
-                       CELERY_TASK_EAGER_PROPAGATES=True, SMS_PROVIDER="termii",
-                       TERMII_API_KEY="do-not-return-or-log")
-    @patch("apps.sms.tasks.get_provider", side_effect=SMSError("sender rejected"))
-    def test_provider_failure_outside_demo_returns_generic_502_and_keeps_otp(self, provider):
-        with self.assertLogs("apps.sms", level="ERROR") as captured:
-            response = self.client.post("/api/auth/otp/send", {
-                "phone": "08012345678", "purpose": "signup",
-            }, format="json")
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.data, {
-            "error": "sms_unavailable", "message": "Could not send SMS right now",
-        })
         self.assertNotIn("code", response.data)
-        self.assertNotIn("do-not-return-or-log", response.content.decode())
-        self.assertNotIn("do-not-return-or-log", "\n".join(captured.output))
-        self.assertIsNotNone(cache.get(_otp_key("2348012345678", "signup")))
+        self.assertNotIn("sms_sent", response.data)
+        self.assertNotIn(self.email_code(), response.content.decode())
+        sms.assert_not_called()
+
+    @patch("apps.accounts.email_otp.send_mail", side_effect=RuntimeError("mail unavailable"))
+    def test_email_failure_returns_generic_error_without_code(self, send_mail):
+        response = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345678", "email": "mail-fail@example.com", "purpose": "signup",
+        }, format="json")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.data["error"], "email_unavailable")
+        self.assertNotIn("code", response.data)
+        send_mail.assert_called_once()
 
     @override_settings(USE_REDIS=False)
     @patch("apps.sms.tasks.get_provider", side_effect=SMSError("provider down"))
@@ -190,29 +150,33 @@ class SMSOTPTests(TestCase):
         retry.assert_not_called()
 
     @patch("apps.sms.otp.send_sms_task.delay")
-    def test_non_demo_response_omits_code_and_success_verify_issues_token(self, delay):
-        response = self.client.post("/api/auth/otp/send", {"phone": "08012345678", "purpose": "signup"}, format="json")
+    def test_email_otp_signup_issues_token_without_sms(self, sms):
+        response = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345678", "email": "signup@example.com", "purpose": "signup",
+        }, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("code", response.data)
-        sent_code = delay.call_args.args[1].split(" is ")[1].split(".")[0]
+        sent_code = self.email_code()
         verified = self.client.post("/api/auth/otp/verify", {
-            "phone": "08012345678", "purpose": "signup", "code": sent_code,
+            "phone": "08012345678", "email": "signup@example.com", "purpose": "signup", "code": sent_code,
             "password": "valid-password-123", "policies_accepted": True,
         }, format="json")
         self.assertEqual(verified.status_code, 200)
         self.assertIn("token", verified.data)
-        acceptance = PolicyAcceptance.objects.get(user__phone="+2348012345678")
+        account = User.objects.get(phone="+2348012345678")
+        self.assertFalse(account.is_phone_verified)
+        acceptance = PolicyAcceptance.objects.get(user=account)
         self.assertEqual(acceptance.terms_version, TERMS_VERSION)
         self.assertEqual(acceptance.privacy_version, PRIVACY_VERSION)
+        sms.assert_not_called()
 
-    @patch("apps.sms.otp.send_sms_task.delay")
-    def test_signup_requires_policy_acceptance_without_consuming_otp(self, delay):
+    def test_signup_requires_policy_acceptance_without_consuming_otp(self):
         response = self.client.post("/api/auth/otp/send", {
-            "phone": "08012345678", "purpose": "signup",
+            "phone": "08012345678", "email": "policy@example.com", "purpose": "signup",
         }, format="json")
-        sent_code = delay.call_args.args[1].split(" is ")[1].split(".")[0]
+        sent_code = self.email_code()
         payload = {
-            "phone": "08012345678", "purpose": "signup", "code": sent_code,
+            "phone": "08012345678", "email": "policy@example.com", "purpose": "signup", "code": sent_code,
             "password": "valid-password-123",
         }
 
@@ -226,74 +190,74 @@ class SMSOTPTests(TestCase):
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(PolicyAcceptance.objects.count(), 1)
 
-    @patch("apps.sms.otp.send_sms_task.delay")
-    def test_login_sends_and_verifies_otp_for_existing_staff_user(self, send_task):
+    def test_login_sends_and_verifies_email_otp_for_existing_staff_user(self):
         staff_user = User.objects.create_user(
-            "+2348012345678", "staff-password-123", is_staff=True, is_phone_verified=True,
+            "+2348012345678", "staff-password-123", email="staff@example.com", is_staff=True,
         )
         sent = self.client.post("/api/auth/otp/send", {
-            "phone": "08012345678", "purpose": "login",
+            "email": "staff@example.com", "purpose": "login",
         }, format="json")
         self.assertEqual(sent.status_code, 200)
-        code = send_task.call_args.args[1].split(" is ")[1].split(".")[0]
+        code = self.email_code()
 
         verified = self.client.post("/api/auth/otp/verify", {
-            "phone": "+2348012345678", "purpose": "login", "code": code,
+            "email": "staff@example.com", "purpose": "login", "code": code,
         }, format="json")
         self.assertEqual(verified.status_code, 200)
         self.assertEqual(verified.data["user"]["id"], str(staff_user.id))
         self.assertTrue(verified.data["user"]["is_staff"])
         self.assertIn("token", verified.data)
 
-    @patch("apps.sms.otp.send_sms_task.delay")
-    def test_login_unknown_phone_reports_missing_account_before_sending_otp(self, send_task):
+    def test_login_unknown_email_reports_missing_account_before_sending_otp(self):
         sent = self.client.post("/api/auth/otp/send", {
-            "phone": "08012345678", "purpose": "login",
+            "email": "missing@example.com", "purpose": "login",
         }, format="json")
         self.assertEqual(sent.status_code, 404)
         self.assertEqual(sent.data["error"], "account_not_found")
-        send_task.assert_not_called()
 
         verified = self.client.post("/api/auth/otp/verify", {
-            "phone": "08012345678", "purpose": "login", "code": "123456",
+            "email": "missing@example.com", "purpose": "login", "code": "123456",
         }, format="json")
         self.assertEqual(verified.status_code, 404)
         self.assertEqual(verified.data["error"], "account_not_found")
 
     def test_send_throttled_by_ip(self):
-        with patch("apps.sms.otp.send_sms_task.delay"):
-            cache.clear()
-            for index in range(3):
-                response = self.client.post("/api/auth/otp/send", {
-                    "phone": f"0801234567{index}", "purpose": "signup",
-                }, format="json")
-                self.assertEqual(response.status_code, 200)
+        cache.clear()
+        for index in range(3):
             response = self.client.post("/api/auth/otp/send", {
-                "phone": "08012345679", "purpose": "signup",
+                "phone": f"0801234567{index}", "email": f"signup{index}@example.com", "purpose": "signup",
             }, format="json")
+            self.assertEqual(response.status_code, 200)
+        response = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345679", "email": "signup4@example.com", "purpose": "signup",
+        }, format="json")
         self.assertEqual(response.status_code, 429)
 
     @patch("apps.sms.throttles.cache.get", side_effect=RuntimeError("cache unavailable"))
     def test_otp_send_returns_503_when_throttle_cache_is_unavailable(self, cache_get):
         response = self.client.post("/api/auth/otp/send", {
-            "phone": "08012345678", "purpose": "signup",
+            "phone": "08012345678", "email": "cache@example.com", "purpose": "signup",
         }, format="json")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.data["detail"].code, "cache_unavailable")
         cache_get.assert_called_once()
 
-    def test_send_throttled_by_phone(self):
-        with patch("apps.sms.otp.send_sms_task.delay"):
-            for _ in range(3):
-                response = self.client.post("/api/auth/otp/send", {
-                    "phone": "08012345678", "purpose": "signup",
-                }, format="json")
-                self.assertEqual(response.status_code, 200)
-                cache.delete("sms:cooldown:signup:" + hashlib.sha256(b"2348012345678").hexdigest())
-            response = self.client.post("/api/auth/otp/send", {
-                "phone": "08012345678", "purpose": "signup",
-            }, format="json")
-        self.assertEqual(response.status_code, 429)
+    def test_signup_rejects_duplicate_email(self):
+        User.objects.create_user("+2348012345678", email="taken@example.com")
+        response = self.client.post("/api/auth/otp/send", {
+            "phone": "08012345679", "email": "TAKEN@example.com", "purpose": "signup",
+        }, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"], "email_in_use")
+
+    def test_login_rejects_ambiguous_legacy_email(self):
+        User.objects.create_user("+2348012345678", email="shared@example.com")
+        User.objects.create_user("+2348012345679", email="SHARED@example.com")
+        response = self.client.post("/api/auth/otp/send", {
+            "email": "shared@example.com", "purpose": "login",
+        }, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"], "email_not_unique")
 
 
 @override_settings(DEBUG=True, SMS_PROVIDER="console", SMS_ALLOWLIST=[])
@@ -342,6 +306,7 @@ class ExpiryReminderTests(TestCase):
 
 @override_settings(USE_REDIS=False, DEMO_MODE=True, DEMO_PHONE_ALLOWLIST={"2348012345678"},
                    SMS_PROVIDER="console", DEBUG=True,
+                   EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
                    CACHES={"default": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", "LOCATION": "django_cache"}},
                    CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class DatabaseCacheFlowTests(TestCase):
@@ -352,13 +317,17 @@ class DatabaseCacheFlowTests(TestCase):
     def test_full_otp_flow_without_redis(self):
         client = APIClient()
         response = client.post("/api/auth/otp/send", {
-            "phone": "08012345678", "purpose": "signup",
+            "phone": "08012345678", "email": "database@example.com", "purpose": "signup",
         }, format="json")
         self.assertEqual(response.status_code, 200)
+        self.assertNotIn("code", response.data)
+        from django.core import mail
+        code = re.search(r"code is (\d{6})", mail.outbox[-1].body).group(1)
         verified = client.post("/api/auth/otp/verify", {
-            "phone": "08012345678", "purpose": "signup", "code": response.data["code"],
+            "phone": "08012345678", "email": "database@example.com", "purpose": "signup", "code": code,
             "password": "valid-password-123", "policies_accepted": True,
         }, format="json")
         self.assertEqual(verified.status_code, 200)
         self.assertTrue(User.objects.filter(phone="+2348012345678").exists())
-        self.assertEqual(SMSLog.objects.filter(purpose="otp", status=SMSLog.SENT).count(), 1)
+        self.assertEqual(SMSLog.objects.filter(purpose="otp").count(), 0)
+        self.assertEqual(len(mail.outbox), 1)

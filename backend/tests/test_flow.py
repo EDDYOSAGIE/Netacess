@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 
 from apps.access_codes.models import AccessCode
 from apps.access_codes.services import generate_code, validate_code
-from apps.accounts.models import PhoneOTP, User
+from apps.accounts.models import AuthToken, PhoneOTP, User
 from apps.accounts.services import OTPError, request_otp, verify_otp
 from apps.notifications.models import Notification
 from apps.payments.models import Payment
@@ -138,7 +138,8 @@ class PaymentFlowTests(TestCase):
 
 
 @override_settings(ACCESS_CODE_ENC_KEY=TEST_KEY, DEBUG=True, SMS_PROVIDER="console",
-                   SMS_ALLOWLIST=[], DEMO_MODE=False, DEMO_PHONE_ALLOWLIST=set())
+                   SMS_ALLOWLIST=[], DEMO_MODE=False, DEMO_PHONE_ALLOWLIST=set(),
+                   EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 @patch("apps.payments.providers.flutterwave.FlutterwaveAdapter.create_checkout", fake_checkout)
 class ApiTests(TestCase):
     def setUp(self):
@@ -147,14 +148,17 @@ class ApiTests(TestCase):
         self.c = APIClient()
 
     def login(self):
+        from django.core import mail
         with patch("apps.sms.otp.send_sms_task.delay") as sms:
             sent = self.c.post("/api/auth/otp/send", {
-                "phone": "08012345678", "purpose": "signup",
+                "phone": "08012345678", "email": "customer@example.com", "purpose": "signup",
             }, format="json")
             self.assertEqual(sent.status_code, 200, sent.data)
-            code = re.search(r"\bis (\d{6})\.", sms.call_args.args[1]).group(1)
+            self.assertNotIn("code", sent.data)
+            self.assertFalse(sms.called)
+            code = re.search(r"code is (\d{6})", mail.outbox[-1].body).group(1)
         r = self.c.post("/api/auth/otp/verify", {
-            "phone": "08012345678", "purpose": "signup", "code": code,
+            "phone": "08012345678", "email": "customer@example.com", "purpose": "signup", "code": code,
             "password": "valid-password-123", "policies_accepted": True,
         }, format="json")
         self.assertEqual(r.status_code, 200)
@@ -195,6 +199,27 @@ class ApiTests(TestCase):
 
     def test_requires_login(self):
         self.assertEqual(self.c.post("/api/orders", {}, format="json").status_code, 401)
+
+    def test_idle_token_expires_after_one_hour(self):
+        user = User.objects.create_user("+2348012345678", email="idle@example.com")
+        token = AuthToken.issue(user)
+        token_hash = AuthToken.hash_key(token)
+        AuthToken.objects.filter(key_hash=token_hash).update(
+            last_used_at=timezone.now() - timedelta(hours=1, seconds=1),
+        )
+        self.c.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+        response = self.c.get("/api/me")
+        self.assertEqual(response.status_code, 401)
+        self.assertFalse(AuthToken.objects.filter(key_hash=token_hash).exists())
+
+    def test_active_plan_catalog_is_shared_and_deactivated_plan_is_hidden(self):
+        self.login()
+        plan = Plan.objects.get(code="MONTHLY")
+        first = self.c.get("/api/plans")
+        self.assertIn(str(plan.id), [item["id"] for item in first.data])
+        plan.is_active = False
+        plan.save(update_fields=["is_active"])
+        self.assertNotIn(str(plan.id), [item["id"] for item in self.c.get("/api/plans").data])
 
     def test_provider_down_returns_fallback_message(self):
         self.login()

@@ -5,32 +5,27 @@ from django.core.cache import cache
 from rest_framework.exceptions import APIException
 from rest_framework.throttling import BaseThrottle
 
-from .providers import SMSError, normalize_ng
-
 log = logging.getLogger(__name__)
 
 
 class CacheUnavailable(APIException):
     status_code = 503
-    default_detail = "Signup service is temporarily unavailable. Please try again shortly."
+    default_detail = "Authentication service is temporarily unavailable. Please try again shortly."
     default_code = "cache_unavailable"
 
 
-class OTPPhoneIPThrottle(BaseThrottle):
+class OTPEmailIPThrottle(BaseThrottle):
     limits = ((60, 3), (3600, 10))
 
     def allow_request(self, request, view):
-        try:
-            phone = normalize_ng(request.data.get("phone", ""))
-        except (SMSError, AttributeError):
-            phone = "invalid"
-        phone_hash = hashlib.sha256(phone.encode()).hexdigest()
+        email = str(request.data.get("email", "")).strip().lower()
+        email_hash = hashlib.sha256(email.encode()).hexdigest()
         ip = request.META.get("REMOTE_ADDR", "unknown")
         keys = []
         try:
-            for identity in (f"phone:{phone_hash}", f"ip:{ip}"):
+            for identity in (f"email:{email_hash}", f"ip:{ip}"):
                 for period, limit in self.limits:
-                    key = f"sms:throttle:{identity}:{period}"
+                    key = f"auth:throttle:{identity}:{period}"
                     current = cache.get(key, 0)
                     if current >= limit:
                         self.wait_seconds = period
